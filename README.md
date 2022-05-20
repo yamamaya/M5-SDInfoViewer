@@ -10,5 +10,5 @@ Show primary informations from CID and CSD registers in SD card.
 - Arduino
 
 ## Dependency
-- SdFat
-- LovyanGFX
+- [SdFat](https://github.com/greiman/SdFat)
+- [LovyanGFX](https://github.com/lovyan03/LovyanGFX)
