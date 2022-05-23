@@ -173,7 +173,7 @@ void showCardInformations( cid_t &cid, csd_t &csd ) {
   
   drawLabel( 1, y, "Revision", true );
   lcd.setCursor( SCREEN_WIDTH/2+VALUE_INDENT, y+LABEL_HEIGHT, VALUE_FONT );
-  lcd.printf( "%d%d", cid.prv_n, cid.prv_m );
+  lcd.printf( "%d.%d", cid.prv_n, cid.prv_m );
   y += LABEL_HEIGHT + VALUE_HEIGHT;
 
   drawLabel( 0, y, "Serial number", true );
