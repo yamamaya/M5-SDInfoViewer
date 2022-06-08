@@ -96,6 +96,181 @@ float sdCardMaxDataSpeed( csd_t *csd ) {
   return (float)speed / 1000;
 }
 
+#define ROWS  5
+#define COLS  2
+#define PAGES 2
+
+typedef void(*getValueTextFunc)(char*);
+
+typedef struct {
+  const char * const label;
+  const getValueTextFunc getValueText;
+} DISPLAYITEM;
+
+typedef struct {
+  const DISPLAYITEM items[ROWS][COLS];
+} DISPLAYPAGE;
+
+// Display page definitions
+DISPLAYPAGE pages[PAGES] = {
+  { // Page 1
+    {
+      { // Row 1
+        {
+          "Manufacturer ID",
+          []( char *dest ) {
+            const char *mid_name = getValueById( cid.mid, mid_list, sizeof( mid_list ) / sizeof( mid_list[0] ) );
+            if ( mid_name == NULL ) {
+              mid_name = "unknown";
+            }
+            sprintf( dest, "%02X (%s)", cid.mid, mid_name );
+          }
+        },{
+          NULL, NULL
+        }
+      },
+      { // Row 2
+        {
+          "OEM/Application ID",
+          []( char *dest ) {
+            char buff[3];
+            memcpy( buff, cid.oid, 2 );
+            buff[2] = 0;
+            siftString( buff );
+            uint16_t oid = ( (uint16_t)cid.oid[0] << 8 ) | (uint16_t)cid.oid[1];
+            sprintf( dest, "%04X (%s)", oid, buff );
+          }
+        }, {
+          NULL, NULL
+        }
+      },
+      { // Row 3
+        {
+          "Product name",
+          []( char *dest ) {
+            memcpy( dest, cid.pnm, 5 );
+            dest[5] = 0;
+            siftString( dest );
+          }
+        }, {
+          "Revision",
+          []( char *dest ) {
+            sprintf( dest, "%d.%d", cid.prv_n, cid.prv_m );
+          }
+        }
+      },
+      { // Row 4
+        {
+          "Serial number",
+          []( char *dest ) {
+            sprintf( dest, "%u", cid.psn );
+          }
+        }, {
+          "Manufacturing date",
+          []( char *dest ) {
+            int mdt_year = 2000 + 16*cid.mdt_year_high + cid.mdt_year_low;
+            sprintf( dest, "%d/%d", mdt_year, cid.mdt_month );
+          }
+        }
+      },
+      { // Row 5
+        {
+          "Capacity",
+          []( char *dest ) {
+            uint64_t capacity = (uint64_t)sdCardCapacity( &csd ) * 512;
+            uint32_t capacity_HF;
+            char const *capacity_unit;
+            if ( capacity <= 1048574951424 ) {
+              capacity_HF = (uint32_t)( capacity / 1048576 );
+              capacity_unit = "MB";
+            } else {
+              capacity_HF = (uint32_t)( capacity / 1073741824 );
+              capacity_unit = "GB";
+            }
+            char buff[32];
+            uint64ToString( (uint64_t)capacity_HF, buff, true );
+            sprintf( dest, "%s%s", buff, capacity_unit );
+          }
+        }, {
+          "Max bus clock",
+          []( char *dest ) {
+            float tran_speed = sdCardMaxDataSpeed( &csd );
+            if ( tran_speed < 10 ) {
+              sprintf( dest, "%.1fMHz", tran_speed );
+            } else {
+              sprintf( dest, "%dMHz", (int)tran_speed );
+            }
+          }
+        }
+      }
+    }
+  },
+  { // Page 2
+    {
+      { // Row 1
+        {
+          "Speed class",
+          []( char *dest ) {
+            const char *str = getValueById( sdstat.speedClass, SpeedClass_list, sizeof( SpeedClass_list ) / sizeof( SpeedClass_list[0] ) );
+            if ( str == NULL ) {
+              str = "unknown";
+            }
+            strcpy( dest, str );
+          }
+        }, {
+          "UHS Speed grade",
+          []( char *dest ) {
+            uint8_t UHSSpeedGrade = sdstat.uhsSpeedAuSize >> 4;
+            const char *str = getValueById( UHSSpeedGrade, UHSSpeedClass_list, sizeof( UHSSpeedClass_list ) / sizeof( UHSSpeedClass_list[0] ) );
+            if ( str == NULL ) {
+              str = "N/A";
+            }
+            strcpy( dest, str );
+          }
+        }
+      },
+      { // Row 2
+        {
+          "Video speed",
+          []( char *dest ) {
+            const char *str = getValueById( sdstat.videoSpeed, VideoSpeedClass_list, sizeof( VideoSpeedClass_list ) / sizeof( VideoSpeedClass_list[0] ) );
+            if ( str == NULL ) {
+              str = "N/A";
+            }
+            strcpy( dest, str );
+          }
+        }, {
+          "App performance",
+          []( char *dest ) {
+            uint8_t AppPrefClass = ((uint8_t *)&sdstat)[42] & 0x0f;
+            const char *str = getValueById( AppPrefClass, AppPerfClass_list, sizeof( AppPerfClass_list ) / sizeof( AppPerfClass_list[0] ) );
+            if ( str != NULL ) {
+              strcpy( dest, str );
+            } else {
+              sprintf( dest, "(%d)", AppPrefClass );
+            }
+          }
+        }
+      },
+      { // Row 3
+        {
+          "AU Size",
+          []( char *dest ) {
+            uint8_t AUSize = sdstat.auSize >> 4;
+            strcpy( dest, getValueById( AUSize, AUSize_list, sizeof( AUSize_list ) / sizeof( AUSize_list[0] ) ) );
+          }
+        }, {
+          "UHS AU Size",
+          []( char *dest ) {
+            uint8_t UHS_AUSize = sdstat.uhsSpeedAuSize & 0x0f;
+            strcpy( dest, getValueById( UHS_AUSize, AUSize_list, sizeof( AUSize_list ) / sizeof( AUSize_list[0] ) ) );
+          }
+        }
+      }
+    }
+  }
+};
+
 #define LABEL_FONT &fonts::FreeSans9pt7b
 #define LABEL_HEIGHT 21
 #define VALUE_FONT &fonts::FreeSans12pt7b
@@ -103,31 +278,6 @@ float sdCardMaxDataSpeed( csd_t *csd ) {
 #define VALUE_INDENT 16
 #define SCREEN_WIDTH (lcd.width())
 #define SCREEN_HEIGHT (lcd.height())
-
-void drawLabel( int col, int y, const char *label, bool half ) {
-  int width;
-  if ( half ) {
-    width = SCREEN_WIDTH / 2;
-  } else {
-    width = SCREEN_WIDTH;
-  }
-  int x;
-  if ( col == 0 ) {
-    x = 0;
-    if ( half ) {
-      width -= 4;
-    }
-  } else {
-    x = SCREEN_WIDTH / 2;
-  }
-  lcd.fillRect( x, y, width, LABEL_HEIGHT-2, NAVY );
-  lcd.setCursor( x+1, y, LABEL_FONT );
-  lcd.print( label );
-}
-
-void setCursor( int col, int y ) {
-  lcd.setCursor( ( SCREEN_WIDTH/2 * col ) + VALUE_INDENT, y + LABEL_HEIGHT, VALUE_FONT );
-}
 
 bool initializeSdCard() {
   if ( !sd.cardBegin( SdSpiConfig( TFCARD_CS_PIN, SHARED_SPI, SD_SCK_MHZ( 16 ) ) ) ) {
@@ -159,136 +309,58 @@ bool retrieveCardInformations() {
   return true;
 }
 
-#define NEXT_ROW(y) { y += LABEL_HEIGHT + VALUE_HEIGHT; }
-
-void showPrimaryInformations() {
-  lcd.fillScreen( BLACK );
-  lcd.setTextColor( WHITE );
-
-  int y = 0;
-  char buff[32];
-
-  drawLabel( 0, y, "Manufacturer ID", false );
-  const char *mid_name = getValueById( cid.mid, mid_list, sizeof( mid_list ) / sizeof( mid_list[0] ) );
-  if ( mid_name == NULL ) {
-    mid_name = "unknown";
-  }
-  setCursor( 0, y );
-  lcd.printf( "%02X (%s)", cid.mid, mid_name );
-  NEXT_ROW( y );
-
-  drawLabel( 0, y, "OEM/Application ID", false );
-  memcpy( buff, cid.oid, 2 );
-  buff[2] = 0;
-  siftString( buff );
-  uint16_t oid = ( (uint16_t)cid.oid[0] << 8 ) | (uint16_t)cid.oid[1];
-  setCursor( 0, y );
-  lcd.printf( "%04X (%s)", oid, buff );
-  NEXT_ROW( y );
-
-  drawLabel( 0, y, "Product name", true );
-  memcpy( buff, cid.pnm, 5 );
-  buff[5] = 0;
-  siftString( buff );
-  setCursor( 0, y );
-  lcd.print( buff );
-  
-  drawLabel( 1, y, "Revision", true );
-  setCursor( 1, y );
-  lcd.printf( "%d.%d", cid.prv_n, cid.prv_m );
-  NEXT_ROW( y );
-
-  drawLabel( 0, y, "Serial number", true );
-  setCursor( 0, y );
-  lcd.printf( "%u", cid.psn );
-
-  drawLabel( 1, y, "Manufacturing date", true );
-  int mdt_year = 2000 + 16*cid.mdt_year_high + cid.mdt_year_low;
-  setCursor( 1, y );
-  lcd.printf( "%d/%d", mdt_year, cid.mdt_month );
-  NEXT_ROW( y );
-
-  drawLabel( 0, y, "Capacity", true );
-  uint64_t capacity = (uint64_t)sdCardCapacity( &csd ) * 512;
-  uint32_t capacity_HF;
-  char const *capacity_unit;
-  if ( capacity <= 1048574951424 ) {
-    capacity_HF = (uint32_t)( capacity / 1048576 );
-    capacity_unit = "MB";
+void drawLabel( int col, int y, const char *label, bool full_width ) {
+  int width;
+  if ( full_width ) {
+    width = SCREEN_WIDTH;
   } else {
-    capacity_HF = (uint32_t)( capacity / 1073741824 );
-    capacity_unit = "GB";
+    width = SCREEN_WIDTH / 2;
   }
-  uint64ToString( (uint64_t)capacity_HF, buff, true );
-  setCursor( 0, y );
-  lcd.printf( "%s%s", buff, capacity_unit );
-
-  drawLabel( 1, y, "Max bus clock", true );
-  float tran_speed = sdCardMaxDataSpeed( &csd );
-  if ( tran_speed < 10 ) {
-    sprintf( buff, "%.1f", tran_speed );
+  int x;
+  if ( col == 0 ) {
+    x = 0;
+    if ( !full_width ) {
+      width -= 4;
+    }
   } else {
-    sprintf( buff, "%d", (int)tran_speed );
+    x = SCREEN_WIDTH / 2;
   }
-  setCursor( 1, y );
-  lcd.printf( "%sMHz", buff );
+  lcd.fillRect( x, y, width, LABEL_HEIGHT-2, NAVY );
+  lcd.setCursor( x+1, y, LABEL_FONT );
+  lcd.print( label );
 }
 
-void showSecondaryInformations() {
+void setCursor( int col, int y ) {
+  lcd.setCursor( ( SCREEN_WIDTH/2 * col ) + VALUE_INDENT, y + LABEL_HEIGHT, VALUE_FONT );
+}
+
+void showPage( int page_number ) {
+  DISPLAYPAGE *page = &pages[page_number];
+
   lcd.fillScreen( BLACK );
   lcd.setTextColor( WHITE );
 
   int y = 0;
-  char buff[32];
-
-  drawLabel( 0, y, "Speed class", true );
-  const char *SpeedClass_str = getValueById( sdstat.speedClass, SpeedClass_list, sizeof( SpeedClass_list ) / sizeof( SpeedClass_list[0] ) );
-  if ( SpeedClass_str == NULL ) {
-    SpeedClass_str = "unknown";
+  for ( int row = 0 ; row < ROWS ; row ++ ) {
+    for ( int col = 0 ; col < COLS ; col ++ ) {
+      if ( page->items[row][col].label == NULL ) {
+        continue;
+      }
+      bool full_width = false;
+      if ( col == 0 && page->items[row][1].label == NULL ) {
+        full_width = true;
+      }
+      drawLabel( col, y, page->items[row][col].label, full_width );
+      setCursor( col, y );
+      char buff[32];
+      page->items[row][col].getValueText( buff );
+      lcd.print( buff );
+      if ( full_width ) {
+        break;
+      }
+    }
+    y += LABEL_HEIGHT + VALUE_HEIGHT;
   }
-  setCursor( 0, y );
-  lcd.print( SpeedClass_str );
-
-  drawLabel( 1, y, "UHS Speed grade", true );
-  uint8_t UHSSpeedGrade = sdstat.uhsSpeedAuSize >> 4;
-  const char *UHSSpeedClass_str = getValueById( UHSSpeedGrade, UHSSpeedClass_list, sizeof( UHSSpeedClass_list ) / sizeof( UHSSpeedClass_list[0] ) );
-  if ( UHSSpeedClass_str == NULL ) {
-    SpeedClass_str = "N/A";
-  }
-  setCursor( 1, y );
-  lcd.print( UHSSpeedClass_str );
-  NEXT_ROW( y );
-
-  drawLabel( 0, y, "Video speed", true );
-  const char *VideoSpeedClass_str = getValueById( sdstat.videoSpeed, VideoSpeedClass_list, sizeof( VideoSpeedClass_list ) / sizeof( VideoSpeedClass_list[0] ) );
-  if ( VideoSpeedClass_str == NULL ) {
-    VideoSpeedClass_str = "N/A";
-  }
-  setCursor( 0, y );
-  lcd.print( VideoSpeedClass_str );
-
-  drawLabel( 1, y, "App performance", true );
-  uint8_t AppPrefClass = ((uint8_t *)&sdstat)[42] & 0x0f;
-  const char *AppPerfClass_str = getValueById( AppPrefClass, AppPerfClass_list, sizeof( AppPerfClass_list ) / sizeof( AppPerfClass_list[0] ) );
-  if ( AppPerfClass_str == NULL ) {
-    sprintf( buff, "(%d)", AppPrefClass );
-    AppPerfClass_str = buff;
-  }
-  setCursor( 1, y );
-  lcd.print( AppPerfClass_str );
-  NEXT_ROW( y );
-
-  drawLabel( 0, y, "AU Size", true );
-  uint8_t AUSize = sdstat.auSize >> 4;
-  const char *AUSize_str = getValueById( AUSize, AUSize_list, sizeof( AUSize_list ) / sizeof( AUSize_list[0] ) );
-  setCursor( 0, y );
-  lcd.print( AUSize_str );
-
-  drawLabel( 1, y, "UHS AU Size", true );
-  uint8_t UHS_AUSize = sdstat.uhsSpeedAuSize & 0x0f;
-  const char *UHS_AUSize_str = getValueById( UHS_AUSize, AUSize_list, sizeof( AUSize_list ) / sizeof( AUSize_list[0] ) );
-  setCursor( 1, y );
-  lcd.print( UHS_AUSize_str );
 }
 
 void setup(){
@@ -305,7 +377,6 @@ void setup(){
   if ( initializeSdCard() ) {
     isCardReady = true;
     retrieveCardInformations();
-    showPrimaryInformations();
   } else {
     lcd.setFont( LABEL_FONT );
     lcd.setTextDatum( textdatum_t::middle_center );
@@ -314,14 +385,23 @@ void setup(){
   }
 }
 
+static bool first_loop = true;
+static int current_page = 0;
+
 void loop() {
   M5.update();
   if ( !isCardReady ) {
     return;
   }
+  int page = current_page;
   if ( M5.BtnA.wasPressed() ) {
-    showPrimaryInformations();
+    page = 0;
   } else if ( M5.BtnB.wasPressed() ) {
-    showSecondaryInformations();
+    page = 1;
   }
+  if ( page != current_page || first_loop ) {
+    current_page = page;
+    showPage( page );
+  }
+  first_loop = false;
 }
