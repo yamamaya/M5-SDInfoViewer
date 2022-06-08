@@ -22,7 +22,6 @@ static bool isCardReady = false;
 static cid_t cid;
 static csd_t csd;
 static SdStatus_t sdstat;
-static int DisplayPage = 0;
 
 void siftString( char *str ) {
   char *p = str;
