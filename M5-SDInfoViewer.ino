@@ -4,9 +4,9 @@
 #include <LovyanGFX.hpp>
 #include <LGFX_AUTODETECT.hpp>
 #include <SdFat.h>
-#include "SD_MID.h"
+#include "SD_DataTable.h"
 
-//#define DEBUGMODE
+#define DEBUGMODE
 
 #ifdef  DEBUGMODE
 #define DEBUG(x)           _DEBUG(,x)
@@ -17,6 +17,12 @@
 
 static LGFX lcd;
 static SdFs sd;
+
+static bool isCardReady = false;
+static cid_t cid;
+static csd_t csd;
+static SdStatus_t sdstat;
+static int DisplayPage = 0;
 
 void siftString( char *str ) {
   char *p = str;
@@ -47,6 +53,15 @@ void uint64ToString( uint64_t value, char *dest, bool comma = false ) {
     *p = (char)( '0' + d );
   } while ( value != 0 );
   strcpy( dest, p );
+}
+
+const char *getValueById( uint8_t id, DATAPAIR *list, size_t list_size ) {
+  for ( int i = 0 ; i < list_size ; i ++ ) {
+    if ( list[i].id == id ) {
+      return list[i].value;
+    }
+  }
+  return NULL;
 }
 
 float sdCardMaxDataSpeed( csd_t *csd ) {
@@ -110,14 +125,21 @@ void drawLabel( int col, int y, const char *label, bool half ) {
   lcd.print( label );
 }
 
-bool retrieveCardInformations( cid_t &cid, csd_t &csd ) {
+void setCursor( int col, int y ) {
+  lcd.setCursor( ( SCREEN_WIDTH/2 * col ) + VALUE_INDENT, y + LABEL_HEIGHT, VALUE_FONT );
+}
+
+bool initializeSdCard() {
   if ( !sd.cardBegin( SdSpiConfig( TFCARD_CS_PIN, SHARED_SPI, SD_SCK_MHZ( 16 ) ) ) ) {
     DEBUG( Serial.print( "sd.cardBegin failed : " ) );
     DEBUG( Serial.println( sd.sdErrorCode() ) );
     return false;
   }
   DEBUG( Serial.println( "SD Card initialized" ) );
+  return true;
+}
 
+bool retrieveCardInformations() {
   if ( !sd.card()->readCID( &cid ) ) {
     DEBUG( Serial.println( "readCID failed" ) );
     return false;
@@ -129,12 +151,17 @@ bool retrieveCardInformations( cid_t &cid, csd_t &csd ) {
     return false;
   }
   DEBUG( Serial.println( "readCSD succeeded" ) );
-  DEBUG( Serial.print( "CSD structure: " ) );
-  DEBUG( Serial.println( csd.v1.csd_ver ) );
+  if ( !sd.card()->readStatus( (uint8_t*)&sdstat ) ) {
+    DEBUG( Serial.println( "readStatus failed" ) );
+    return false;
+  }
+  DEBUG( Serial.println( "readStatus succeeded" ) );
   return true;
 }
 
-void showCardInformations( cid_t &cid, csd_t &csd ) {
+#define NEXT_ROW(y) { y += LABEL_HEIGHT + VALUE_HEIGHT; }
+
+void showPrimaryInformations() {
   lcd.fillScreen( BLACK );
   lcd.setTextColor( WHITE );
 
@@ -142,49 +169,44 @@ void showCardInformations( cid_t &cid, csd_t &csd ) {
   char buff[32];
 
   drawLabel( 0, y, "Manufacturer ID", false );
-  y += LABEL_HEIGHT;
-  char const *name = "unknown";
-  for ( int i = 0 ; i < sizeof( mid_list ) / sizeof( mid_list[0] ) ; i ++ ) {
-    if ( cid.mid == mid_list[i].id ) {
-      name = mid_list[i].name;
-      break;
-    }
+  const char *mid_name = getValueById( cid.mid, mid_list, sizeof( mid_list ) / sizeof( mid_list[0] ) );
+  if ( mid_name == NULL ) {
+    mid_name = "unknown";
   }
-  lcd.setCursor( VALUE_INDENT, y, VALUE_FONT );
-  lcd.printf( "%02X (%s)", cid.mid, name );
-  y += VALUE_HEIGHT;
+  setCursor( 0, y );
+  lcd.printf( "%02X (%s)", cid.mid, mid_name );
+  NEXT_ROW( y );
 
   drawLabel( 0, y, "OEM/Application ID", false );
-  y += LABEL_HEIGHT;
   memcpy( buff, cid.oid, 2 );
   buff[2] = 0;
   siftString( buff );
   uint16_t oid = ( (uint16_t)cid.oid[0] << 8 ) | (uint16_t)cid.oid[1];
-  lcd.setCursor( VALUE_INDENT, y, VALUE_FONT );
+  setCursor( 0, y );
   lcd.printf( "%04X (%s)", oid, buff );
-  y += VALUE_HEIGHT;
+  NEXT_ROW( y );
 
   drawLabel( 0, y, "Product name", true );
   memcpy( buff, cid.pnm, 5 );
   buff[5] = 0;
   siftString( buff );
-  lcd.setCursor( VALUE_INDENT, y+LABEL_HEIGHT, VALUE_FONT );
-  lcd.printf( "%s", buff );
+  setCursor( 0, y );
+  lcd.print( buff );
   
   drawLabel( 1, y, "Revision", true );
-  lcd.setCursor( SCREEN_WIDTH/2+VALUE_INDENT, y+LABEL_HEIGHT, VALUE_FONT );
+  setCursor( 1, y );
   lcd.printf( "%d.%d", cid.prv_n, cid.prv_m );
-  y += LABEL_HEIGHT + VALUE_HEIGHT;
+  NEXT_ROW( y );
 
   drawLabel( 0, y, "Serial number", true );
-  lcd.setCursor( VALUE_INDENT, y+LABEL_HEIGHT, VALUE_FONT );
+  setCursor( 0, y );
   lcd.printf( "%u", cid.psn );
 
   drawLabel( 1, y, "Manufacturing date", true );
   int mdt_year = 2000 + 16*cid.mdt_year_high + cid.mdt_year_low;
-  lcd.setCursor( SCREEN_WIDTH/2+VALUE_INDENT, y+LABEL_HEIGHT, VALUE_FONT );
+  setCursor( 1, y );
   lcd.printf( "%d/%d", mdt_year, cid.mdt_month );
-  y += LABEL_HEIGHT + VALUE_HEIGHT;
+  NEXT_ROW( y );
 
   drawLabel( 0, y, "Capacity", true );
   uint64_t capacity = (uint64_t)sdCardCapacity( &csd ) * 512;
@@ -198,7 +220,7 @@ void showCardInformations( cid_t &cid, csd_t &csd ) {
     capacity_unit = "GB";
   }
   uint64ToString( (uint64_t)capacity_HF, buff, true );
-  lcd.setCursor( VALUE_INDENT, y+LABEL_HEIGHT, VALUE_FONT );
+  setCursor( 0, y );
   lcd.printf( "%s%s", buff, capacity_unit );
 
   drawLabel( 1, y, "Max bus clock", true );
@@ -208,8 +230,65 @@ void showCardInformations( cid_t &cid, csd_t &csd ) {
   } else {
     sprintf( buff, "%d", (int)tran_speed );
   }
-  lcd.setCursor( SCREEN_WIDTH/2+VALUE_INDENT, y+LABEL_HEIGHT, VALUE_FONT );
+  setCursor( 1, y );
   lcd.printf( "%sMHz", buff );
+}
+
+void showSecondaryInformations() {
+  lcd.fillScreen( BLACK );
+  lcd.setTextColor( WHITE );
+
+  int y = 0;
+  char buff[32];
+
+  drawLabel( 0, y, "Speed class", true );
+  const char *SpeedClass_str = getValueById( sdstat.speedClass, SpeedClass_list, sizeof( SpeedClass_list ) / sizeof( SpeedClass_list[0] ) );
+  if ( SpeedClass_str == NULL ) {
+    SpeedClass_str = "unknown";
+  }
+  setCursor( 0, y );
+  lcd.print( SpeedClass_str );
+
+  drawLabel( 1, y, "UHS Speed grade", true );
+  uint8_t UHSSpeedGrade = sdstat.uhsSpeedAuSize >> 4;
+  const char *UHSSpeedClass_str = getValueById( UHSSpeedGrade, UHSSpeedClass_list, sizeof( UHSSpeedClass_list ) / sizeof( UHSSpeedClass_list[0] ) );
+  if ( UHSSpeedClass_str == NULL ) {
+    SpeedClass_str = "N/A";
+  }
+  setCursor( 1, y );
+  lcd.print( UHSSpeedClass_str );
+  NEXT_ROW( y );
+
+  drawLabel( 0, y, "Video speed", true );
+  const char *VideoSpeedClass_str = getValueById( sdstat.videoSpeed, VideoSpeedClass_list, sizeof( VideoSpeedClass_list ) / sizeof( VideoSpeedClass_list[0] ) );
+  if ( VideoSpeedClass_str == NULL ) {
+    VideoSpeedClass_str = "N/A";
+  }
+  setCursor( 0, y );
+  lcd.print( VideoSpeedClass_str );
+
+  drawLabel( 1, y, "App performance", true );
+  uint8_t AppPrefClass = ((uint8_t *)&sdstat)[42] & 0x0f;
+  const char *AppPerfClass_str = getValueById( AppPrefClass, AppPerfClass_list, sizeof( AppPerfClass_list ) / sizeof( AppPerfClass_list[0] ) );
+  if ( AppPerfClass_str == NULL ) {
+    sprintf( buff, "(%d)", AppPrefClass );
+    AppPerfClass_str = buff;
+  }
+  setCursor( 1, y );
+  lcd.print( AppPerfClass_str );
+  NEXT_ROW( y );
+
+  drawLabel( 0, y, "AU Size", true );
+  uint8_t AUSize = sdstat.auSize >> 4;
+  const char *AUSize_str = getValueById( AUSize, AUSize_list, sizeof( AUSize_list ) / sizeof( AUSize_list[0] ) );
+  setCursor( 0, y );
+  lcd.print( AUSize_str );
+
+  drawLabel( 1, y, "UHS AU Size", true );
+  uint8_t UHS_AUSize = sdstat.uhsSpeedAuSize & 0x0f;
+  const char *UHS_AUSize_str = getValueById( UHS_AUSize, AUSize_list, sizeof( AUSize_list ) / sizeof( AUSize_list[0] ) );
+  setCursor( 1, y );
+  lcd.print( UHS_AUSize_str );
 }
 
 void setup(){
@@ -223,10 +302,10 @@ void setup(){
   lcd.setTextColor( WHITE );
   lcd.setCursor( 0, 0 );
 
-  cid_t cid;
-  csd_t csd;
-  if ( retrieveCardInformations( cid, csd ) ) {
-    showCardInformations( cid, csd );
+  if ( initializeSdCard() ) {
+    isCardReady = true;
+    retrieveCardInformations();
+    showPrimaryInformations();
   } else {
     lcd.setFont( LABEL_FONT );
     lcd.setTextDatum( textdatum_t::middle_center );
@@ -237,4 +316,12 @@ void setup(){
 
 void loop() {
   M5.update();
+  if ( !isCardReady ) {
+    return;
+  }
+  if ( M5.BtnA.wasPressed() ) {
+    showPrimaryInformations();
+  } else if ( M5.BtnB.wasPressed() ) {
+    showSecondaryInformations();
+  }
 }
