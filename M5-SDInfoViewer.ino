@@ -112,7 +112,7 @@ typedef struct {
 } DISPLAYPAGE;
 
 // Display page definitions
-DISPLAYPAGE pages[PAGES] = {
+const DISPLAYPAGE pages[PAGES] = {
   { // Page 1
     {
       { // Row 1
@@ -335,7 +335,7 @@ void setCursor( int col, int y ) {
 }
 
 void showPage( int page_number ) {
-  DISPLAYPAGE *page = &pages[page_number];
+  const DISPLAYPAGE *page = &pages[page_number];
 
   lcd.fillScreen( BLACK );
   lcd.setTextColor( WHITE );
