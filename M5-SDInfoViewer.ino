@@ -6,7 +6,7 @@
 #include <SdFat.h>
 #include "SD_DataTable.h"
 
-#define DEBUGMODE
+// #define DEBUGMODE
 
 #ifdef  DEBUGMODE
 #define DEBUG(x)           _DEBUG(,x)
